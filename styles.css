@@ -755,3 +755,78 @@ button:active {
 .balance-negative i {
   color: #f87171;
 }
+
+.participants-section {
+  padding: 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-sm);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.participants-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.participants-heading strong {
+  font-size: 0.95rem;
+}
+
+.participants-heading span,
+.participants-hint {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.participants-hint {
+  margin: 3px 0 10px;
+}
+
+.participant-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.participant-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.participant-option:has(input:checked) {
+  border-color: rgba(99, 102, 241, 0.65);
+  color: #fff;
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.participant-option input {
+  accent-color: var(--primary-color);
+}
+
+.participant-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.participant-action {
+  padding: 4px 8px;
+  color: #c7d2fe;
+  background: transparent;
+  font-size: 0.8rem;
+}
+
+.participant-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

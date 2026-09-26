@@ -14,6 +14,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const expenseAmountInput = document.getElementById('expenseAmount');
     const expenseDescriptionInput = document.getElementById('expenseDescription');
     const splitOptions = document.getElementById('splitOptions');
+    const participantsContainer = document.getElementById('expenseParticipants');
+    const participantCount = document.getElementById('participantCount');
+    const selectAllParticipantsButton = document.getElementById('selectAllParticipants');
+    const clearParticipantsButton = document.getElementById('clearParticipants');
     const customSplitContainer = document.getElementById('customSplit');
     const addExpenseButton = document.getElementById('addExpense');
     const balancesList = document.getElementById('balancesList');
@@ -26,6 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalSpentElement = document.getElementById('totalSpent');
 
     let editingExpenseId = null;
+    let selectedParticipants = new Set(people);
+    let participantsTouched = false;
     let sharedMode = false;
     let hasSharedState = false;
     let canEdit = false;
@@ -144,18 +150,48 @@ document.addEventListener('DOMContentLoaded', () => {
         const name = personNameInput.value.trim();
         if (name && !people.includes(name)) {
             people.push(name);
+            if (!participantsTouched) selectedParticipants.add(name);
             saveData();
             updateAll();
             personNameInput.value = '';
         }
     });
 
+    function getSelectedParticipants() {
+        return people.filter(person => selectedParticipants.has(person));
+    }
+
+    function updateParticipantCount() {
+        const selectedCount = getSelectedParticipants().length;
+        participantCount.textContent = `${selectedCount} of ${people.length} selected`;
+        selectAllParticipantsButton.disabled = selectedCount === people.length;
+        clearParticipantsButton.disabled = selectedCount === 0;
+    }
+
+    function renderParticipantSelector() {
+        participantsContainer.innerHTML = '';
+        people.forEach(person => {
+            const label = document.createElement('label');
+            label.className = 'participant-option';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = selectedParticipants.has(person);
+            checkbox.dataset.person = person;
+            const name = document.createElement('span');
+            name.textContent = person;
+            label.append(checkbox, name);
+            participantsContainer.appendChild(label);
+        });
+        updateParticipantCount();
+    }
+
     function renderCustomSplit(existingAmounts = null) {
         customSplitContainer.innerHTML = '';
-        people.forEach(person => {
+        getSelectedParticipants().forEach(person => {
             const input = document.createElement('input');
             input.type = 'number';
             input.step = '0.01';
+            input.min = '0';
             input.placeholder = `Amount for ${person}`;
             input.dataset.person = person;
             if (existingAmounts && existingAmounts[person] !== undefined) {
@@ -163,8 +199,44 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             customSplitContainer.appendChild(input);
         });
-        customSplitContainer.style.display = 'block';
+        customSplitContainer.style.display = getSelectedParticipants().length ? 'block' : 'none';
     }
+
+    function getCustomSplitValues() {
+        return Object.fromEntries(
+            [...customSplitContainer.querySelectorAll('input')]
+                .map(input => [input.dataset.person, input.value])
+        );
+    }
+
+    participantsContainer.addEventListener('change', event => {
+        const checkbox = event.target.closest('input[type="checkbox"][data-person]');
+        if (!checkbox) return;
+        const existingAmounts = getCustomSplitValues();
+        if (checkbox.checked) selectedParticipants.add(checkbox.dataset.person);
+        else selectedParticipants.delete(checkbox.dataset.person);
+        participantsTouched = true;
+        updateParticipantCount();
+        if (document.querySelector('input[name="splitType"]:checked').value === 'custom') {
+            renderCustomSplit(existingAmounts);
+        }
+    });
+
+    selectAllParticipantsButton.addEventListener('click', () => {
+        const existingAmounts = getCustomSplitValues();
+        selectedParticipants = new Set(people);
+        participantsTouched = true;
+        renderParticipantSelector();
+        if (document.querySelector('input[name="splitType"]:checked').value === 'custom') renderCustomSplit(existingAmounts);
+    });
+
+    clearParticipantsButton.addEventListener('click', () => {
+        selectedParticipants.clear();
+        participantsTouched = true;
+        renderParticipantSelector();
+        customSplitContainer.innerHTML = '';
+        customSplitContainer.style.display = 'none';
+    });
 
     splitOptions.addEventListener('change', () => {
         if (document.querySelector('input[name="splitType"]:checked').value === 'custom') {
@@ -178,6 +250,9 @@ document.addEventListener('DOMContentLoaded', () => {
         expenseAmountInput.value = '';
         expenseDescriptionInput.value = '';
         payerSelect.value = '';
+        selectedParticipants = new Set(people);
+        participantsTouched = false;
+        renderParticipantSelector();
         document.querySelector('input[name="splitType"][value="equal"]').checked = true;
         customSplitContainer.innerHTML = '';
         customSplitContainer.style.display = 'none';
@@ -191,12 +266,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const payer = payerSelect.value;
         const description = expenseDescriptionInput.value.trim();
         if (amount > 0 && payer) {
+            const participants = getSelectedParticipants();
+            if (participants.length === 0) {
+                alert('Select at least one person to share this expense.');
+                return;
+            }
             const splitType = document.querySelector('input[name="splitType"]:checked').value;
             let splitAmounts = {};
 
             if (splitType === 'equal') {
-                const equalAmount = amount / people.length;
-                people.forEach(person => {
+                const equalAmount = amount / participants.length;
+                participants.forEach(person => {
                     splitAmounts[person] = equalAmount;
                 });
             } else {
@@ -217,10 +297,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (editingExpenseId) {
                 const idx = expenses.findIndex(e => e.id === editingExpenseId);
                 if (idx !== -1) {
-                    expenses[idx] = { id: editingExpenseId, amount, payer, splitAmounts, description };
+                    expenses[idx] = { id: editingExpenseId, amount, payer, splitAmounts, participants, description };
                 }
             } else {
-                expenses.push({ id: generateId(), amount, payer, splitAmounts, description });
+                expenses.push({ id: generateId(), amount, payer, splitAmounts, participants, description });
             }
 
             saveData();
@@ -253,11 +333,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (newName && newName.trim() !== '' && newName !== personName && !people.includes(newName)) {
                 const index = people.indexOf(personName);
                 people[index] = newName;
+                if (selectedParticipants.has(personName)) {
+                    selectedParticipants.delete(personName);
+                    selectedParticipants.add(newName);
+                }
                 expenses.forEach(e => {
                     if (e.payer === personName) e.payer = newName;
                     if (e.splitAmounts[personName] !== undefined) {
                         e.splitAmounts[newName] = e.splitAmounts[personName];
                         delete e.splitAmounts[personName];
+                    }
+                    if (Array.isArray(e.participants)) {
+                        e.participants = e.participants.map(person => person === personName ? newName : person);
                     }
                 });
                 payments.forEach(p => {
@@ -274,10 +361,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!confirm(`Are you sure you want to delete ${personName}? This will remove them from all expenses and payments.`)) return;
             const index = people.indexOf(personName);
             people.splice(index, 1);
+            selectedParticipants.delete(personName);
 
             expenses = expenses.filter(e => e.payer !== personName);
             expenses.forEach(e => {
                 delete e.splitAmounts[personName];
+                if (Array.isArray(e.participants)) {
+                    e.participants = e.participants.filter(person => person !== personName);
+                }
             });
             payments = payments.filter(p => p.payer !== personName && p.receiver !== personName);
 
@@ -305,10 +396,19 @@ document.addEventListener('DOMContentLoaded', () => {
             expenseDescriptionInput.value = expense.description;
             payerSelect.value = expense.payer;
 
+            const expenseParticipants = Array.isArray(expense.participants)
+                ? expense.participants
+                : Object.entries(expense.splitAmounts)
+                    .filter(([, amount]) => amount > 0)
+                    .map(([person]) => person);
+            selectedParticipants = new Set(expenseParticipants.filter(person => people.includes(person)));
+            participantsTouched = true;
+            renderParticipantSelector();
+
             let allEqual = true;
-            if (people.length > 0) {
-                const eqAmt = expense.amount / people.length;
-                for (let person of people) {
+            if (expenseParticipants.length > 0) {
+                const eqAmt = expense.amount / expenseParticipants.length;
+                for (let person of expenseParticipants) {
                     if (Math.abs((expense.splitAmounts[person] || 0) - eqAmt) > 0.01) {
                         allEqual = false;
                         break;
@@ -318,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 allEqual = false;
             }
 
-            if (allEqual && Object.keys(expense.splitAmounts).length === people.length) {
+            if (allEqual && Object.keys(expense.splitAmounts).filter(person => expense.splitAmounts[person] > 0).length === expenseParticipants.length) {
                 document.querySelector('input[name="splitType"][value="equal"]').checked = true;
                 customSplitContainer.style.display = 'none';
             } else {
@@ -538,8 +638,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateAll() {
+        const existingAmounts = getCustomSplitValues();
         updatePeopleList();
         updatePayerSelect();
+        renderParticipantSelector();
+        if (customSplitContainer.style.display === 'block') renderCustomSplit(existingAmounts);
         const netBalances = calculateNetBalances();
         updateBalancesList(netBalances);
         updateDebtsList(netBalances);
