@@ -353,6 +353,47 @@ button:active {
   transform: scale(0.98);
 }
 
+.sharing-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.sharing-controls span {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  flex-basis: 100%;
+}
+
+.sharing-controls button {
+  padding: 10px 14px;
+  font-size: 0.9rem;
+}
+
+.btn-danger {
+  background: var(--danger-color);
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: var(--danger-hover);
+}
+
+.read-only #addPerson,
+.read-only #personName,
+.read-only .expense-section,
+.read-only .payment-section,
+.read-only .edit-person,
+.read-only .delete-person,
+.read-only .edit-expense,
+.read-only .delete-expense,
+.read-only .delete-payment {
+  display: none !important;
+}
+
 .btn-primary {
   background: var(--primary-color);
   color: #fff;
