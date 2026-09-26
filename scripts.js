@@ -26,12 +26,121 @@ document.addEventListener('DOMContentLoaded', () => {
     const totalSpentElement = document.getElementById('totalSpent');
 
     let editingExpenseId = null;
+    let sharedMode = false;
+    let hasSharedState = false;
+    let canEdit = false;
+    let ownerPassword = sessionStorage.getItem('splitwise-owner-password') || '';
+    const syncStatus = document.getElementById('syncStatus');
+    const resetMonthButton = document.getElementById('resetMonth');
+
+    function setStatus(message) {
+        syncStatus.textContent = message;
+    }
+
+    function currentState() {
+        return { people, expenses, payments };
+    }
+
+    async function writeSharedState(action = 'save', state = currentState(), password = ownerPassword) {
+        const response = await fetch('/api/balance', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'x-owner-password': password },
+            body: JSON.stringify({ state, action }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(result.error || 'Could not save shared balance.');
+    }
+
+    document.getElementById('shareLink').addEventListener('click', async () => {
+        try {
+            await navigator.clipboard.writeText(location.href.split('#')[0]);
+            setStatus('Share link copied.');
+        } catch (_) {
+            window.prompt('Copy this link to share the balance:', location.href.split('#')[0]);
+        }
+    });
+
+    document.getElementById('ownerAccess').addEventListener('click', async () => {
+        const password = window.prompt('Enter the owner password to edit this shared balance:');
+        if (!password) return;
+        try {
+            await writeSharedState(hasSharedState ? 'verify' : 'save', currentState(), password);
+            ownerPassword = password;
+            hasSharedState = true;
+            sessionStorage.setItem('splitwise-owner-password', password);
+            canEdit = true;
+            document.body.classList.remove('read-only');
+            resetMonthButton.hidden = false;
+            document.getElementById('ownerAccess').innerHTML = '<i class="fas fa-unlock"></i> Owner access enabled';
+            setStatus('Shared balance ready to edit.');
+        } catch (error) {
+            setStatus(error.message);
+            alert(error.message);
+        }
+    });
+
+    resetMonthButton.addEventListener('click', async () => {
+        if (!confirm('Archive this month and clear expenses and payments? The people list will be kept.')) return;
+        const freshState = { people, expenses: [], payments: [] };
+        try {
+            await writeSharedState('reset', freshState);
+            expenses = [];
+            payments = [];
+            saveData();
+            updateAll();
+            setStatus('Previous month archived. New month started.');
+        } catch (error) {
+            setStatus(error.message);
+            alert(error.message);
+        }
+    });
+
+    async function loadSharedState() {
+        try {
+            const response = await fetch('/api/balance', { cache: 'no-store' });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Shared storage unavailable.');
+            sharedMode = true;
+            if (result.state) {
+                hasSharedState = true;
+                people = Array.isArray(result.state.people) ? result.state.people : [];
+                expenses = Array.isArray(result.state.expenses) ? result.state.expenses : [];
+                payments = Array.isArray(result.state.payments) ? result.state.payments : [];
+                saveLocalData();
+                updateAll();
+                setStatus('Showing the shared balance.');
+            } else {
+                setStatus('No shared balance yet. Owner access will publish this device’s data.');
+            }
+            document.body.classList.add('read-only');
+            if (ownerPassword) {
+                try {
+                    await writeSharedState(hasSharedState ? 'verify' : 'save');
+                    hasSharedState = true;
+                    canEdit = true;
+                    document.body.classList.remove('read-only');
+                    resetMonthButton.hidden = false;
+                    setStatus('Shared balance ready to edit.');
+                } catch (_) {
+                    ownerPassword = '';
+                    sessionStorage.removeItem('splitwise-owner-password');
+                }
+            }
+            if (!canEdit) setStatus(result.state ? 'Shared, read-only view.' : 'No shared balance yet. Owner access will publish this device’s data.');
+        } catch (error) {
+            sharedMode = false;
+            document.body.classList.remove('read-only');
+            setStatus('Local mode: changes stay on this device.');
+            console.warn('Shared balance unavailable:', error.message);
+        }
+    }
 
     function generateId() {
         return Math.random().toString(36).substr(2, 9) + '_' + Date.now();
     }
 
     addPersonButton.addEventListener('click', () => {
+        if (sharedMode && !canEdit) return;
         const name = personNameInput.value.trim();
         if (name && !people.includes(name)) {
             people.push(name);
@@ -77,6 +186,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     addExpenseButton.addEventListener('click', () => {
+        if (sharedMode && !canEdit) return;
         const amount = parseFloat(expenseAmountInput.value);
         const payer = payerSelect.value;
         const description = expenseDescriptionInput.value.trim();
@@ -120,6 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     addPaymentButton.addEventListener('click', () => {
+        if (sharedMode && !canEdit) return;
         const amount = parseFloat(paymentAmountInput.value);
         const payer = payerPaymentSelect.value;
         const receiver = receiverPaymentSelect.value;
@@ -134,6 +245,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     peopleList.addEventListener('click', (event) => {
+        if (sharedMode && !canEdit) return;
         if (event.target.closest('.edit-person')) {
             const btn = event.target.closest('.edit-person');
             const personName = btn.dataset.person;
@@ -175,6 +287,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     balancesList.addEventListener('click', (event) => {
+        if (sharedMode && !canEdit) return;
         if (event.target.closest('.delete-expense')) {
             if (!confirm("Are you sure you want to delete this expense?")) return;
             const id = event.target.closest('.delete-expense').dataset.id;
@@ -407,10 +520,21 @@ document.addEventListener('DOMContentLoaded', () => {
         totalSpentElement.textContent = `$${totalSpent.toFixed(2)}`;
     }
 
-    function saveData() {
+    function saveLocalData() {
         localStorage.setItem('people', JSON.stringify(people));
         localStorage.setItem('expenses', JSON.stringify(expenses));
         localStorage.setItem('payments', JSON.stringify(payments));
+    }
+
+    function saveData() {
+        saveLocalData();
+        if (sharedMode && canEdit) {
+            setStatus('Saving shared balance…');
+            writeSharedState().then(() => setStatus('Shared balance saved.')).catch(error => {
+                setStatus(error.message);
+                alert(error.message);
+            });
+        }
     }
 
     function updateAll() {
@@ -424,4 +548,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial render
     updateAll();
+    loadSharedState();
 });
