@@ -81,6 +81,19 @@
                                 <span class="radio-custom">Custom Split</span>
                             </label>
                         </div>
+
+                        <div class="participants-section">
+                            <div class="participants-heading">
+                                <strong>Who shares this expense?</strong>
+                                <span id="participantCount" aria-live="polite"></span>
+                            </div>
+                            <p class="participants-hint">Select the people whose share should be included.</p>
+                            <div id="expenseParticipants" class="participant-list"></div>
+                            <div class="participant-actions">
+                                <button type="button" id="selectAllParticipants" class="participant-action">Select all</button>
+                                <button type="button" id="clearParticipants" class="participant-action">Clear</button>
+                            </div>
+                        </div>
                         
                         <div id="customSplit" class="custom-split-container"></div>
                         
