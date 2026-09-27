@@ -23,6 +23,15 @@
             <p>Seamlessly manage shared expenses</p>
             <div class="sharing-controls" aria-label="Shared balance controls">
                 <span id="syncStatus" role="status">Connecting…</span>
+                <label class="currency-control" for="currencySelect">
+                    <span>Settlement currency</span>
+                    <select id="currencySelect" aria-label="Settlement currency">
+                        <option value="USD">US Dollar (USD)</option>
+                        <option value="EUR">Euro (EUR)</option>
+                        <option value="GBP">Pound sterling (GBP)</option>
+                    </select>
+                </label>
+                <small class="currency-note">Balance currency. Set it before recording this month’s transactions.</small>
                 <button id="shareLink" class="btn-secondary"><i class="fas fa-link"></i> Copy share link</button>
                 <button id="ownerAccess" class="btn-primary"><i class="fas fa-lock"></i> Owner access</button>
                 <button id="resetMonth" class="btn-danger" hidden><i class="fas fa-rotate"></i> Archive and start new month</button>
@@ -37,7 +46,7 @@
                     <div class="total-expense-content">
                         <div class="expense-info">
                             <h3>Total Spent</h3>
-                            <p id="totalSpent">$0.00</p>
+                            <p id="totalSpent">0</p>
                         </div>
                         <div class="expense-icon">
                             <i class="fas fa-chart-line"></i>
@@ -61,7 +70,18 @@
                         <h2><i class="fas fa-file-invoice-dollar"></i> Add Expense</h2>
                     </div>
                     <div class="form-container">
-                        <input type="number" id="expenseAmount" placeholder="Amount ($)" min="0" step="0.01">
+                        <div class="expense-amount-row">
+                            <input type="number" id="expenseAmount" placeholder="Amount" min="0" step="0.01">
+                            <div class="select-wrapper">
+                                <select id="expenseCurrency" aria-label="Expense currency">
+                                    <option value="USD">USD</option>
+                                    <option value="EUR">EUR</option>
+                                    <option value="GBP">GBP</option>
+                                </select>
+                                <i class="fas fa-chevron-down"></i>
+                            </div>
+                        </div>
+                        <p id="exchangeRateStatus" class="exchange-rate-status" aria-live="polite"></p>
                         <input type="text" id="expenseDescription" placeholder="What was this for?">
                         
                         <div class="select-wrapper">
@@ -104,7 +124,7 @@
                 <details class="payment-section glass-card payment-details">
                     <summary><i class="fas fa-handshake"></i> Record another payment</summary>
                     <div class="form-container">
-                        <input type="number" id="paymentAmount" placeholder="Amount ($)" min="0" step="0.01">
+                        <input type="number" id="paymentAmount" placeholder="Amount" min="0" step="0.01">
                         <input type="text" id="paymentDescription" placeholder="Payment Note/Method (optional)">
                         
                         <div class="select-row">

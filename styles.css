@@ -353,6 +353,13 @@ button:active {
   transform: scale(0.98);
 }
 
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .sharing-controls {
   display: flex;
   justify-content: center;
@@ -366,6 +373,56 @@ button:active {
   color: var(--text-secondary);
   font-size: 0.9rem;
   flex-basis: 100%;
+}
+
+.currency-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.sharing-controls .currency-control span {
+  flex-basis: auto;
+}
+
+.currency-control select {
+  width: auto;
+  min-width: 175px;
+  padding: 9px 32px 9px 11px;
+  font-size: 0.84rem;
+}
+
+.currency-control select:disabled {
+  opacity: 0.8;
+  cursor: not-allowed;
+}
+
+.currency-note {
+  flex: 0 1 auto !important;
+  color: var(--text-secondary);
+  font-size: 0.76rem !important;
+}
+
+.expense-amount-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 10px;
+}
+
+.exchange-rate-status {
+  margin-top: -8px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.exchange-rate-status.is-error {
+  color: #fca5a5;
+}
+
+.exchange-rate-entry {
+  color: var(--text-secondary);
 }
 
 .sharing-controls button {
@@ -384,13 +441,12 @@ button:active {
 
 .read-only #addPerson,
 .read-only #personName,
-.read-only .expense-section,
-.read-only .payment-section,
 .read-only .edit-person,
 .read-only .delete-person,
 .read-only .edit-expense,
 .read-only .delete-expense,
-.read-only .delete-payment {
+.read-only .delete-payment,
+.read-only #resetMonth {
   display: none !important;
 }
 
@@ -639,12 +695,27 @@ button:active {
     flex-direction: column;
   }
 
+  .expense-amount-row {
+    grid-template-columns: minmax(0, 1fr) 100px;
+    gap: 8px;
+  }
+
   #addPerson {
     width: 100%;
   }
 
   .select-row {
     flex-direction: column;
+  }
+
+  .currency-control {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .currency-control select {
+    width: 100%;
   }
 
   .select-icon {

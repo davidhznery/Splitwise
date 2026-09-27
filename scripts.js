@@ -2,6 +2,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let people = JSON.parse(localStorage.getItem('people')) || [];
     let expenses = JSON.parse(localStorage.getItem('expenses')) || [];
     let payments = JSON.parse(localStorage.getItem('payments')) || [];
+    const supportedCurrencies = ['USD', 'EUR', 'GBP'];
+    let currency = supportedCurrencies.includes(localStorage.getItem('currency'))
+        ? localStorage.getItem('currency')
+        : 'USD';
+    let expenseCurrency = currency;
+    let exchangeRate = 1;
+    let exchangeRateDate = '';
+    let exchangeRateLoading = false;
+    let exchangeRateError = '';
+    let exchangeRateRequest = 0;
 
     // Ensure backwards compatibility by adding IDs if missing
     expenses.forEach((e, i) => { if (!e.id) e.id = 'e_' + Date.now() + '_' + i; });
@@ -29,30 +39,38 @@ document.addEventListener('DOMContentLoaded', () => {
     const paymentDescriptionInput = document.getElementById('paymentDescription');
     const addPaymentButton = document.getElementById('addPayment');
     const totalSpentElement = document.getElementById('totalSpent');
+    const currencySelect = document.getElementById('currencySelect');
+    const expenseCurrencySelect = document.getElementById('expenseCurrency');
+    const exchangeRateStatus = document.getElementById('exchangeRateStatus');
 
     let editingExpenseId = null;
     let selectedParticipants = new Set(people);
     let participantsTouched = false;
     let sharedMode = false;
+    let sharedLoading = true;
     let hasSharedState = false;
     let canEdit = false;
     let ownerPassword = sessionStorage.getItem('splitwise-owner-password') || '';
     const syncStatus = document.getElementById('syncStatus');
     const resetMonthButton = document.getElementById('resetMonth');
 
-    debtsList.addEventListener('click', event => {
+    debtsList.addEventListener('click', async event => {
         const button = event.target.closest('.record-suggested-payment');
-        if (!button || (sharedMode && !canEdit)) return;
+        if (!button || sharedLoading || !hasSharedState && sharedMode) return;
 
-        payments.push({
+        const payment = {
             id: generateId(),
             amount: Number(button.dataset.amount),
             payer: button.dataset.from,
             receiver: button.dataset.to,
             description: 'Suggested settlement',
-        });
-        saveData();
-        updateAll();
+        };
+        try {
+            await storeNewEntry('payment', payment);
+        } catch (error) {
+            setStatus(error.message);
+            alert(error.message);
+        }
     });
 
     function setStatus(message) {
@@ -60,7 +78,122 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function currentState() {
-        return { people, expenses, payments };
+        return { people, expenses, payments, currency };
+    }
+
+    function formatMoney(value) {
+        return formatCurrency(value, currency);
+    }
+
+    function formatCurrency(value, currencyCode) {
+        return new Intl.NumberFormat('en', {
+            style: 'currency',
+            currency: currencyCode,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(Number(value) || 0);
+    }
+
+    function updateExchangeRateStatus() {
+        const amount = Number.parseFloat(expenseAmountInput.value);
+        exchangeRateStatus.classList.remove('is-error');
+        if (expenseCurrency === currency) {
+            exchangeRateStatus.textContent = `No conversion needed; balances are in ${currency}.`;
+        } else if (exchangeRateLoading) {
+            exchangeRateStatus.textContent = `Loading ${expenseCurrency} to ${currency} exchange rate…`;
+        } else if (exchangeRateError) {
+            exchangeRateStatus.textContent = exchangeRateError;
+            exchangeRateStatus.classList.add('is-error');
+        } else {
+            const rateText = `1 ${expenseCurrency} = ${formatCurrency(exchangeRate, currency)} (${exchangeRateDate})`;
+            const totalText = Number.isFinite(amount) && amount > 0
+                ? ` · About ${formatMoney(amount * exchangeRate)} in the shared balance.`
+                : '';
+            exchangeRateStatus.textContent = `Reference rate: ${rateText}${totalText}`;
+        }
+    }
+
+    async function loadExchangeRate() {
+        const requestId = ++exchangeRateRequest;
+        const from = expenseCurrency;
+        const to = currency;
+        exchangeRateError = '';
+        if (from === to) {
+            exchangeRate = 1;
+            exchangeRateDate = '';
+            exchangeRateLoading = false;
+            updateExchangeRateStatus();
+            updateAll();
+            return;
+        }
+
+        exchangeRate = null;
+        exchangeRateLoading = true;
+        updateExchangeRateStatus();
+        updateAll();
+        try {
+            const response = await fetch(`/api/exchange-rate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { cache: 'no-store' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || 'Could not load the exchange rate.');
+            if (requestId !== exchangeRateRequest) return;
+            exchangeRate = Number(result.rate);
+            exchangeRateDate = result.date || '';
+            if (!Number.isFinite(exchangeRate) || exchangeRate <= 0) throw new Error('The exchange rate is invalid.');
+        } catch (error) {
+            if (requestId !== exchangeRateRequest) return;
+            exchangeRate = null;
+            exchangeRateDate = '';
+            exchangeRateError = error.message;
+        } finally {
+            if (requestId === exchangeRateRequest) {
+                exchangeRateLoading = false;
+                updateExchangeRateStatus();
+                updateAll();
+            }
+        }
+    }
+
+    function convertExpenseShares(amount, splitAmounts, participants, rate) {
+        const totalSourceCents = Math.round(amount * 100);
+        const settlementAmountCents = Math.round(totalSourceCents * rate);
+        const settlementSplitAmounts = {};
+        let sourceCumulativeCents = 0;
+        let settlementCumulativeCents = 0;
+        participants.forEach((person, index) => {
+            sourceCumulativeCents += Math.round((splitAmounts[person] || 0) * 100);
+            const nextSettlementCents = index === participants.length - 1
+                ? settlementAmountCents
+                : Math.round(sourceCumulativeCents * rate);
+            settlementSplitAmounts[person] = (nextSettlementCents - settlementCumulativeCents) / 100;
+            settlementCumulativeCents = nextSettlementCents;
+        });
+        return { settlementAmount: settlementAmountCents / 100, settlementSplitAmounts };
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '').replace(/[&<>"']/g, character => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;',
+        })[character]);
+    }
+
+    function applySharedState(state) {
+        people = Array.isArray(state.people) ? state.people : [];
+        expenses = Array.isArray(state.expenses) ? state.expenses : [];
+        payments = Array.isArray(state.payments) ? state.payments : [];
+        currency = supportedCurrencies.includes(state.currency) ? state.currency : 'USD';
+        expenseCurrency = currency;
+        exchangeRate = 1;
+        exchangeRateDate = '';
+        exchangeRateError = '';
+        selectedParticipants = new Set(people);
+        participantsTouched = false;
+        hasSharedState = true;
+        saveLocalData();
+        updateAll();
     }
 
     async function writeSharedState(action = 'save', state = currentState(), password = ownerPassword) {
@@ -72,6 +205,49 @@ document.addEventListener('DOMContentLoaded', () => {
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.error || 'Could not save shared balance.');
     }
+
+    async function storeNewEntry(type, entry) {
+        if (sharedMode && !canEdit) {
+            setStatus('Adding to shared balance…');
+            const response = await fetch('/api/balance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'add-entry', type, entry }),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(result.error || 'Could not add this to the shared balance.');
+            applySharedState(result.state);
+            setStatus(type === 'expense' ? 'Expense added to shared balance.' : 'Payment added to shared balance.');
+            return;
+        }
+
+        (type === 'expense' ? expenses : payments).push(entry);
+        saveData();
+        updateAll();
+    }
+
+    currencySelect.addEventListener('change', () => {
+        if (sharedLoading || (sharedMode && !canEdit)) return;
+        if (expenses.length || payments.length) return;
+        const previousCurrency = currency;
+        currency = supportedCurrencies.includes(currencySelect.value) ? currencySelect.value : 'USD';
+        if (expenseCurrency === previousCurrency) {
+            expenseCurrency = currency;
+            expenseCurrencySelect.value = currency;
+        }
+        saveData();
+        updateAll();
+        if (document.querySelector('input[name="splitType"]:checked').value === 'custom') updateCustomSplitRemainder();
+        loadExchangeRate();
+    });
+
+    expenseCurrencySelect.addEventListener('change', () => {
+        expenseCurrency = supportedCurrencies.includes(expenseCurrencySelect.value)
+            ? expenseCurrencySelect.value
+            : currency;
+        if (document.querySelector('input[name="splitType"]:checked').value === 'custom') updateCustomSplitRemainder();
+        loadExchangeRate();
+    });
 
     document.getElementById('shareLink').addEventListener('click', async () => {
         try {
@@ -93,6 +269,7 @@ document.addEventListener('DOMContentLoaded', () => {
             canEdit = true;
             document.body.classList.remove('read-only');
             resetMonthButton.hidden = false;
+            updateAll();
             document.getElementById('ownerAccess').innerHTML = '<i class="fas fa-unlock"></i> Owner access enabled';
             setStatus('Shared balance ready to edit.');
         } catch (error) {
@@ -103,7 +280,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     resetMonthButton.addEventListener('click', async () => {
         if (!confirm('Archive this month and clear expenses and payments? The people list will be kept.')) return;
-        const freshState = { people, expenses: [], payments: [] };
+        const freshState = { people, expenses: [], payments: [], currency };
         try {
             await writeSharedState('reset', freshState);
             expenses = [];
@@ -124,12 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) throw new Error(result.error || 'Shared storage unavailable.');
             sharedMode = true;
             if (result.state) {
-                hasSharedState = true;
-                people = Array.isArray(result.state.people) ? result.state.people : [];
-                expenses = Array.isArray(result.state.expenses) ? result.state.expenses : [];
-                payments = Array.isArray(result.state.payments) ? result.state.payments : [];
-                saveLocalData();
-                updateAll();
+                applySharedState(result.state);
                 setStatus('Showing the shared balance.');
             } else {
                 setStatus('No shared balance yet. Owner access will publish this device’s data.');
@@ -142,18 +314,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     canEdit = true;
                     document.body.classList.remove('read-only');
                     resetMonthButton.hidden = false;
+                    updateAll();
                     setStatus('Shared balance ready to edit.');
                 } catch (_) {
                     ownerPassword = '';
                     sessionStorage.removeItem('splitwise-owner-password');
                 }
             }
-            if (!canEdit) setStatus(result.state ? 'Shared, read-only view.' : 'No shared balance yet. Owner access will publish this device’s data.');
+            if (!canEdit) setStatus(result.state ? 'Shared balance. Anyone with the link can add expenses and payments.' : 'No shared balance yet. Owner access will publish this device’s data.');
         } catch (error) {
             sharedMode = false;
             document.body.classList.remove('read-only');
             setStatus('Local mode: changes stay on this device.');
             console.warn('Shared balance unavailable:', error.message);
+        } finally {
+            sharedLoading = false;
+            updateAll();
         }
     }
 
@@ -274,13 +450,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const remainingCents = Math.round(total * 100) - enteredCents;
         finalInput.value = (Math.max(0, remainingCents) / 100).toFixed(2);
         if (remainingCents < 0) {
-            summary.textContent = `Entered amount is $${(Math.abs(remainingCents) / 100).toFixed(2)} over the total.`;
+            summary.textContent = `Entered amount is ${formatCurrency(Math.abs(remainingCents) / 100, expenseCurrency)} over the total.`;
             summary.classList.add('is-over-limit');
         } else {
             const enteredLabel = inputs.length > 1
-                ? `$${(enteredCents / 100).toFixed(2)} entered`
+                ? `${formatCurrency(enteredCents / 100, expenseCurrency)} entered`
                 : 'No amount entered';
-            summary.textContent = `${enteredLabel} · $${(remainingCents / 100).toFixed(2)} remaining for ${finalInput.dataset.person}.`;
+            summary.textContent = `${enteredLabel} · ${formatCurrency(remainingCents / 100, expenseCurrency)} remaining for ${finalInput.dataset.person}.`;
             summary.classList.remove('is-over-limit');
         }
     }
@@ -313,6 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (document.querySelector('input[name="splitType"]:checked').value === 'custom') {
             updateCustomSplitRemainder();
         }
+        updateExchangeRateStatus();
     });
 
     selectAllParticipantsButton.addEventListener('click', () => {
@@ -342,6 +519,13 @@ document.addEventListener('DOMContentLoaded', () => {
     function resetExpenseForm() {
         expenseAmountInput.value = '';
         expenseDescriptionInput.value = '';
+        expenseCurrency = currency;
+        expenseCurrencySelect.value = currency;
+        exchangeRateRequest++;
+        exchangeRate = 1;
+        exchangeRateDate = '';
+        exchangeRateLoading = false;
+        exchangeRateError = '';
         payerSelect.value = '';
         selectedParticipants = new Set(people);
         participantsTouched = false;
@@ -351,15 +535,20 @@ document.addEventListener('DOMContentLoaded', () => {
         customSplitContainer.style.display = 'none';
         editingExpenseId = null;
         addExpenseButton.innerHTML = '<i class="fas fa-plus-circle"></i> Add Expense';
+        updateAll();
     }
 
-    addExpenseButton.addEventListener('click', () => {
-        if (sharedMode && !canEdit) return;
+    addExpenseButton.addEventListener('click', async () => {
+        if (sharedLoading || (sharedMode && !hasSharedState)) return;
         const enteredAmount = parseFloat(expenseAmountInput.value);
         const amount = Number.isFinite(enteredAmount) ? Math.round(enteredAmount * 100) / 100 : 0;
         const payer = payerSelect.value;
         const description = expenseDescriptionInput.value.trim();
         if (amount > 0 && payer) {
+            if (exchangeRateLoading || !Number.isFinite(exchangeRate) || exchangeRate <= 0) {
+                alert(exchangeRateError || 'Wait for a valid exchange rate before adding this expense.');
+                return;
+            }
             const participants = getSelectedParticipants();
             if (participants.length === 0) {
                 alert('Select at least one person to share this expense.');
@@ -400,33 +589,56 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            const converted = convertExpenseShares(amount, splitAmounts, participants, exchangeRate);
+            const expense = {
+                id: editingExpenseId || generateId(),
+                amount,
+                currency: expenseCurrency,
+                exchangeRate,
+                exchangeRateDate: exchangeRateDate || null,
+                ...converted,
+                payer,
+                splitAmounts,
+                participants,
+                description,
+            };
+
             if (editingExpenseId) {
                 const idx = expenses.findIndex(e => e.id === editingExpenseId);
                 if (idx !== -1) {
-                    expenses[idx] = { id: editingExpenseId, amount, payer, splitAmounts, participants, description };
+                    expenses[idx] = expense;
                 }
+                saveData();
+                updateAll();
+                resetExpenseForm();
             } else {
-                expenses.push({ id: generateId(), amount, payer, splitAmounts, participants, description });
+                try {
+                    await storeNewEntry('expense', expense);
+                    resetExpenseForm();
+                } catch (error) {
+                    setStatus(error.message);
+                    alert(error.message);
+                }
             }
-
-            saveData();
-            updateAll();
-            resetExpenseForm();
         }
     });
 
-    addPaymentButton.addEventListener('click', () => {
-        if (sharedMode && !canEdit) return;
+    addPaymentButton.addEventListener('click', async () => {
+        if (sharedLoading || (sharedMode && !hasSharedState)) return;
         const amount = parseFloat(paymentAmountInput.value);
         const payer = payerPaymentSelect.value;
         const receiver = receiverPaymentSelect.value;
         const description = paymentDescriptionInput.value.trim();
         if (amount > 0 && payer && receiver && payer !== receiver) {
-            payments.push({ id: generateId(), amount, payer, receiver, description });
-            saveData();
-            updateAll();
-            paymentAmountInput.value = '';
-            paymentDescriptionInput.value = '';
+            try {
+                const payment = { id: generateId(), amount: Math.round(amount * 100) / 100, payer, receiver, description };
+                await storeNewEntry('payment', payment);
+                paymentAmountInput.value = '';
+                paymentDescriptionInput.value = '';
+            } catch (error) {
+                setStatus(error.message);
+                alert(error.message);
+            }
         }
     });
 
@@ -499,6 +711,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             editingExpenseId = expense.id;
             expenseAmountInput.value = expense.amount;
+            expenseCurrency = supportedCurrencies.includes(expense.currency) ? expense.currency : currency;
+            expenseCurrencySelect.value = expenseCurrency;
+            exchangeRateRequest++;
+            exchangeRate = typeof expense.exchangeRate === 'number' && Number.isFinite(expense.exchangeRate) && expense.exchangeRate > 0
+                ? expense.exchangeRate
+                : (expenseCurrency === currency ? 1 : null);
+            exchangeRateDate = expense.exchangeRateDate || '';
+            exchangeRateError = '';
+            exchangeRateLoading = false;
             expenseDescriptionInput.value = expense.description;
             payerSelect.value = expense.payer;
 
@@ -532,6 +753,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderCustomSplit(expense.splitAmounts);
             }
             addExpenseButton.innerHTML = '<i class="fas fa-save"></i> Save Changes';
+            if (!Number.isFinite(exchangeRate)) loadExchangeRate();
+            else updateAll();
             addExpenseButton.scrollIntoView({ behavior: 'smooth' });
         }
         if (event.target.closest('.delete-payment')) {
@@ -547,10 +770,10 @@ document.addEventListener('DOMContentLoaded', () => {
         peopleList.innerHTML = '';
         people.forEach(person => {
             const li = document.createElement('li');
-            li.innerHTML = `${person} 
+            li.innerHTML = `${escapeHtml(person)}
                 <div class="actions">
-                    <button class="edit-person btn-icon" data-person="${person}" title="Edit"><i class="fas fa-edit"></i></button>
-                    <button class="delete-person btn-icon" data-person="${person}" title="Delete"><i class="fas fa-trash-alt"></i></button>
+                    <button class="edit-person btn-icon" data-person="${escapeHtml(person)}" title="Edit"><i class="fas fa-edit"></i></button>
+                    <button class="delete-person btn-icon" data-person="${escapeHtml(person)}" title="Delete"><i class="fas fa-trash-alt"></i></button>
                 </div>`;
             peopleList.appendChild(li);
         });
@@ -585,9 +808,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         expenses.forEach(expense => {
             if (netBalances[expense.payer] !== undefined) {
-                netBalances[expense.payer] += expense.amount;
+                netBalances[expense.payer] += Number.isFinite(expense.settlementAmount)
+                    ? expense.settlementAmount
+                    : expense.amount;
             }
-            for (const [person, amount] of Object.entries(expense.splitAmounts)) {
+            const settlementShares = expense.settlementSplitAmounts || expense.splitAmounts;
+            for (const [person, amount] of Object.entries(settlementShares)) {
                 if (netBalances[person] !== undefined) {
                     netBalances[person] -= amount;
                 }
@@ -612,6 +838,12 @@ document.addEventListener('DOMContentLoaded', () => {
         expenses.forEach((expense) => {
             const li = document.createElement('li');
             li.classList.add('timeline-item');
+            const sourceCurrency = supportedCurrencies.includes(expense.currency) ? expense.currency : currency;
+            const displayedAmount = formatCurrency(expense.amount, sourceCurrency);
+            const settlementAmount = Number.isFinite(expense.settlementAmount) ? expense.settlementAmount : expense.amount;
+            const exchangeDetails = sourceCurrency !== currency
+                ? `<br><small class="exchange-rate-entry">≈ ${formatMoney(settlementAmount)} · 1 ${sourceCurrency} = ${formatMoney(expense.exchangeRate)} (${escapeHtml(expense.exchangeRateDate || 'rate saved')})</small>`
+                : '';
             const includedPeople = Object.entries(expense.splitAmounts)
                 .filter(([_, amt]) => amt > 0)
                 .map(([p, _]) => p)
@@ -619,13 +851,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             li.innerHTML = `
                 <div class="timeline-details">
-                    <strong>${expense.description}</strong><br>
-                    <small>${expense.payer} paid $${expense.amount.toFixed(2)}</small><br>
-                    <small class="split-info">Split between: ${includedPeople}</small>
+                    <strong>${escapeHtml(expense.description || 'Expense')}</strong><br>
+                    <small>${escapeHtml(expense.payer)} paid ${displayedAmount}</small>${exchangeDetails}<br>
+                    <small class="split-info">Split between: ${escapeHtml(includedPeople)}</small>
                 </div>
                 <div class="timeline-actions">
-                    <button class="edit-expense btn-icon" data-id="${expense.id}" title="Edit"><i class="fas fa-edit"></i></button>
-                    <button class="delete-expense btn-icon" data-id="${expense.id}" title="Delete"><i class="fas fa-trash-alt"></i></button>
+                    <button class="edit-expense btn-icon" data-id="${escapeHtml(expense.id)}" title="Edit"><i class="fas fa-edit"></i></button>
+                    <button class="delete-expense btn-icon" data-id="${escapeHtml(expense.id)}" title="Delete"><i class="fas fa-trash-alt"></i></button>
                 </div>
             `;
             balancesList.appendChild(li);
@@ -636,11 +868,11 @@ document.addEventListener('DOMContentLoaded', () => {
             li.classList.add('timeline-item');
             li.innerHTML = `
                 <div class="timeline-details">
-                    <strong>${payment.description || 'Payment'}</strong><br>
-                    <small>${payment.payer} paid $${payment.amount.toFixed(2)} to ${payment.receiver}</small>
+                    <strong>${escapeHtml(payment.description || 'Payment')}</strong><br>
+                    <small>${escapeHtml(payment.payer)} paid ${formatMoney(payment.amount)} to ${escapeHtml(payment.receiver)}</small>
                 </div>
                 <div class="timeline-actions">
-                    <button class="delete-payment btn-icon" data-id="${payment.id}" title="Delete"><i class="fas fa-trash-alt"></i></button>
+                    <button class="delete-payment btn-icon" data-id="${escapeHtml(payment.id)}" title="Delete"><i class="fas fa-trash-alt"></i></button>
                 </div>
             `;
             balancesList.appendChild(li);
@@ -658,7 +890,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 hasBalances = true;
                 const li = document.createElement('li');
                 li.className = balance > 0 ? 'balance-positive' : 'balance-negative';
-                li.innerHTML = `<span><i class="fas ${balance > 0 ? 'fa-arrow-left' : 'fa-arrow-right'}"></i> &nbsp; ${person}</span> <span>${balance > 0 ? 'gets back' : 'owes'} $${Math.abs(balance).toFixed(2)}</span>`;
+                li.innerHTML = `<span><i class="fas ${balance > 0 ? 'fa-arrow-left' : 'fa-arrow-right'}"></i> &nbsp; ${escapeHtml(person)}</span> <span>${balance > 0 ? 'gets back' : 'owes'} ${formatMoney(Math.abs(balance))}</span>`;
                 balancesList.appendChild(li);
             }
         });
@@ -730,7 +962,7 @@ document.addEventListener('DOMContentLoaded', () => {
             names.appendChild(recipient);
             const amount = document.createElement('strong');
             amount.className = 'suggested-payment-amount';
-            amount.textContent = `$${debt.amount.toFixed(2)}`;
+            amount.textContent = formatMoney(debt.amount);
             details.append(names, amount);
 
             const recordButton = document.createElement('button');
@@ -740,21 +972,22 @@ document.addEventListener('DOMContentLoaded', () => {
             recordButton.dataset.to = debt.to;
             recordButton.dataset.amount = debt.amount.toFixed(2);
             recordButton.innerHTML = '<i class="fas fa-check"></i> Record payment';
-            recordButton.disabled = sharedMode && !canEdit;
+            recordButton.disabled = sharedLoading || (sharedMode && !hasSharedState);
             li.append(details, recordButton);
             debtsList.appendChild(li);
         });
     }
 
     function updateTotalSpent() {
-        const totalSpent = expenses.reduce((total, expense) => total + expense.amount, 0);
-        totalSpentElement.textContent = `$${totalSpent.toFixed(2)}`;
+        const totalSpent = expenses.reduce((total, expense) => total + (Number.isFinite(expense.settlementAmount) ? expense.settlementAmount : expense.amount), 0);
+        totalSpentElement.textContent = formatMoney(totalSpent);
     }
 
     function saveLocalData() {
         localStorage.setItem('people', JSON.stringify(people));
         localStorage.setItem('expenses', JSON.stringify(expenses));
         localStorage.setItem('payments', JSON.stringify(payments));
+        localStorage.setItem('currency', currency);
     }
 
     function saveData() {
@@ -769,6 +1002,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateAll() {
+        currencySelect.value = currency;
+        currencySelect.disabled = sharedLoading || (sharedMode && !canEdit) || expenses.length > 0 || payments.length > 0;
+        expenseCurrencySelect.value = expenseCurrency;
+        expenseCurrencySelect.disabled = sharedLoading || (sharedMode && !hasSharedState && !canEdit);
+        expenseAmountInput.placeholder = `Amount (${expenseCurrency})`;
+        paymentAmountInput.placeholder = `Amount (${currency})`;
+        updateExchangeRateStatus();
+        const canAddSharedEntries = !sharedLoading && (!sharedMode || hasSharedState);
+        addExpenseButton.disabled = !canAddSharedEntries;
+        addExpenseButton.disabled = addExpenseButton.disabled || exchangeRateLoading || !Number.isFinite(exchangeRate) || Boolean(exchangeRateError);
+        addPaymentButton.disabled = !canAddSharedEntries;
         const existingAmounts = getCustomSplitValues();
         updatePeopleList();
         updatePayerSelect();
