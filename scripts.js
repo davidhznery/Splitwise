@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const addExpenseButton = document.getElementById('addExpense');
     const balancesList = document.getElementById('balancesList');
     const debtsList = document.getElementById('debtsList');
+    const settlementCount = document.getElementById('settlementCount');
     const payerPaymentSelect = document.getElementById('payerPayment');
     const receiverPaymentSelect = document.getElementById('receiverPayment');
     const paymentAmountInput = document.getElementById('paymentAmount');
@@ -38,6 +39,21 @@ document.addEventListener('DOMContentLoaded', () => {
     let ownerPassword = sessionStorage.getItem('splitwise-owner-password') || '';
     const syncStatus = document.getElementById('syncStatus');
     const resetMonthButton = document.getElementById('resetMonth');
+
+    debtsList.addEventListener('click', event => {
+        const button = event.target.closest('.record-suggested-payment');
+        if (!button || (sharedMode && !canEdit)) return;
+
+        payments.push({
+            id: generateId(),
+            amount: Number(button.dataset.amount),
+            payer: button.dataset.from,
+            receiver: button.dataset.to,
+            description: 'Suggested settlement',
+        });
+        saveData();
+        updateAll();
+    });
 
     function setStatus(message) {
         syncStatus.textContent = message;
@@ -187,19 +203,86 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderCustomSplit(existingAmounts = null) {
         customSplitContainer.innerHTML = '';
-        getSelectedParticipants().forEach(person => {
+        const participants = getSelectedParticipants();
+        const helper = document.createElement('p');
+        helper.className = 'custom-split-help';
+        helper.textContent = participants.length > 1
+            ? 'Enter each share; the last person automatically gets the remaining amount.'
+            : 'The selected person will be assigned the full amount.';
+        customSplitContainer.appendChild(helper);
+
+        participants.forEach((person, index) => {
+            const row = document.createElement('label');
+            row.className = 'custom-split-row';
+            const name = document.createElement('span');
+            name.className = 'custom-split-name';
+            name.textContent = person;
+
             const input = document.createElement('input');
             input.type = 'number';
             input.step = '0.01';
             input.min = '0';
-            input.placeholder = `Amount for ${person}`;
+            input.inputMode = 'decimal';
+            input.placeholder = '0.00';
             input.dataset.person = person;
-            if (existingAmounts && existingAmounts[person] !== undefined) {
-                input.value = existingAmounts[person];
+            input.setAttribute('aria-label', `Share for ${person}`);
+            const isRemainder = index === participants.length - 1;
+            if (isRemainder) {
+                input.readOnly = true;
+                input.classList.add('auto-split-amount');
+                input.title = 'Automatically calculated from the remaining amount';
+                const badge = document.createElement('span');
+                badge.className = 'auto-split-badge';
+                badge.textContent = 'Auto';
+                row.append(name, input, badge);
+            } else {
+                if (existingAmounts && existingAmounts[person] !== undefined) {
+                    input.value = existingAmounts[person];
+                }
+                row.append(name, input);
             }
-            customSplitContainer.appendChild(input);
+            customSplitContainer.appendChild(row);
         });
-        customSplitContainer.style.display = getSelectedParticipants().length ? 'block' : 'none';
+
+        const summary = document.createElement('p');
+        summary.className = 'custom-split-summary';
+        summary.setAttribute('aria-live', 'polite');
+        customSplitContainer.appendChild(summary);
+        updateCustomSplitRemainder();
+        customSplitContainer.style.display = participants.length ? 'block' : 'none';
+    }
+
+    function updateCustomSplitRemainder() {
+        const inputs = [...customSplitContainer.querySelectorAll('input[data-person]')];
+        if (!inputs.length) return;
+
+        const total = Number.parseFloat(expenseAmountInput.value);
+        const summary = customSplitContainer.querySelector('.custom-split-summary');
+        const finalInput = inputs[inputs.length - 1];
+        const enteredCents = inputs.slice(0, -1).reduce((sum, input) => {
+            const value = Number.parseFloat(input.value);
+            return sum + (Number.isFinite(value) ? Math.round(value * 100) : 0);
+        }, 0);
+
+        if (!Number.isFinite(total) || total < 0) {
+            finalInput.value = '';
+            summary.textContent = 'Enter the total to calculate the last share.';
+            summary.classList.remove('is-over-limit');
+            return;
+        }
+
+        const remainingCents = Math.round(total * 100) - enteredCents;
+        finalInput.value = (Math.max(0, remainingCents) / 100).toFixed(2);
+        if (remainingCents < 0) {
+            summary.textContent = `Entered amount is $${(Math.abs(remainingCents) / 100).toFixed(2)} over the total.`;
+            summary.classList.add('is-over-limit');
+        } else {
+            const enteredLabel = inputs.length > 1
+                ? `$${(enteredCents / 100).toFixed(2)} entered`
+                : 'No amount entered';
+            summary.textContent = `${enteredLabel} · $${(remainingCents / 100).toFixed(2)} remaining for ${finalInput.dataset.person}.`;
+            summary.classList.remove('is-over-limit');
+        }
     }
 
     function getCustomSplitValues() {
@@ -219,6 +302,16 @@ document.addEventListener('DOMContentLoaded', () => {
         updateParticipantCount();
         if (document.querySelector('input[name="splitType"]:checked').value === 'custom') {
             renderCustomSplit(existingAmounts);
+        }
+    });
+
+    customSplitContainer.addEventListener('input', event => {
+        if (event.target.matches('input[data-person]:not([readonly])')) updateCustomSplitRemainder();
+    });
+
+    expenseAmountInput.addEventListener('input', () => {
+        if (document.querySelector('input[name="splitType"]:checked').value === 'custom') {
+            updateCustomSplitRemainder();
         }
     });
 
@@ -262,7 +355,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     addExpenseButton.addEventListener('click', () => {
         if (sharedMode && !canEdit) return;
-        const amount = parseFloat(expenseAmountInput.value);
+        const enteredAmount = parseFloat(expenseAmountInput.value);
+        const amount = Number.isFinite(enteredAmount) ? Math.round(enteredAmount * 100) / 100 : 0;
         const payer = payerSelect.value;
         const description = expenseDescriptionInput.value.trim();
         if (amount > 0 && payer) {
@@ -275,22 +369,34 @@ document.addEventListener('DOMContentLoaded', () => {
             let splitAmounts = {};
 
             if (splitType === 'equal') {
-                const equalAmount = amount / participants.length;
+                const totalCents = Math.round(amount * 100);
+                const baseShare = Math.floor(totalCents / participants.length);
                 participants.forEach(person => {
-                    splitAmounts[person] = equalAmount;
+                    splitAmounts[person] = baseShare / 100;
                 });
+                const finalPerson = participants[participants.length - 1];
+                splitAmounts[finalPerson] = (totalCents - baseShare * (participants.length - 1)) / 100;
             } else {
+                const hasNegativeShare = [...customSplitContainer.querySelectorAll('input:not([readonly])')]
+                    .some(input => Number.parseFloat(input.value) < 0);
+                if (hasNegativeShare) {
+                    alert('Shares cannot be negative.');
+                    return;
+                }
                 customSplitContainer.querySelectorAll('input').forEach(input => {
                     const person = input.dataset.person;
-                    const personAmount = parseFloat(input.value) || 0;
+                    const enteredShare = parseFloat(input.value);
+                    const personAmount = Number.isFinite(enteredShare)
+                        ? Math.round(enteredShare * 100) / 100
+                        : 0;
                     splitAmounts[person] = personAmount;
                 });
             }
 
-            let totalSplit = 0;
-            Object.values(splitAmounts).forEach(value => totalSplit += value);
-            if (Math.abs(totalSplit - amount) > 0.01) {
-                alert('Split amounts do not add up to the total expense amount.');
+            const totalSplitCents = Object.values(splitAmounts)
+                .reduce((total, value) => total + Math.round(value * 100), 0);
+            if (totalSplitCents !== Math.round(amount * 100)) {
+                alert('The shares must add up to the total. Check the amounts entered.');
                 return;
             }
 
@@ -568,8 +674,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const creditors = [];
 
         for (const [person, balance] of Object.entries(netBalances)) {
-            if (balance < -0.01) debtors.push({ person, amount: -balance });
-            else if (balance > 0.01) creditors.push({ person, amount: balance });
+            const amountInCents = Math.round(Math.abs(balance) * 100);
+            if (amountInCents === 0) continue;
+            if (balance < 0) debtors.push({ person, amount: amountInCents });
+            else creditors.push({ person, amount: amountInCents });
         }
 
         debtors.sort((a, b) => b.amount - a.amount);
@@ -584,9 +692,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const amount = Math.min(debtor.amount, creditor.amount);
 
-            const roundedAmount = Math.round(amount * 100) / 100;
-            if (roundedAmount > 0) {
-                transactions.push({ from: debtor.person, to: creditor.person, amount: roundedAmount });
+            if (amount > 0) {
+                transactions.push({ from: debtor.person, to: creditor.person, amount: amount / 100 });
             }
 
             debtor.amount -= amount;
@@ -602,15 +709,39 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateDebtsList(netBalances) {
         const debts = calculateSimplifiedDebts(netBalances);
         debtsList.innerHTML = '';
+        settlementCount.textContent = debts.length === 1
+            ? '1 payment needed'
+            : `${debts.length} payments needed`;
 
         if (debts.length === 0) {
-            debtsList.innerHTML = '<li class="empty-state">No debts to settle up!</li>';
+            debtsList.innerHTML = '<li class="empty-state">Everyone is settled up.</li>';
             return;
         }
 
         debts.forEach(debt => {
             const li = document.createElement('li');
-            li.innerHTML = `<span><strong>${debt.from}</strong> owes <strong>${debt.to}</strong></span> <strong>$${debt.amount.toFixed(2)}</strong>`;
+            li.className = 'suggested-payment';
+            const details = document.createElement('span');
+            details.className = 'suggested-payment-details';
+            const names = document.createElement('span');
+            names.append(document.createTextNode(`${debt.from} pays `));
+            const recipient = document.createElement('strong');
+            recipient.textContent = debt.to;
+            names.appendChild(recipient);
+            const amount = document.createElement('strong');
+            amount.className = 'suggested-payment-amount';
+            amount.textContent = `$${debt.amount.toFixed(2)}`;
+            details.append(names, amount);
+
+            const recordButton = document.createElement('button');
+            recordButton.type = 'button';
+            recordButton.className = 'btn-secondary record-suggested-payment';
+            recordButton.dataset.from = debt.from;
+            recordButton.dataset.to = debt.to;
+            recordButton.dataset.amount = debt.amount.toFixed(2);
+            recordButton.innerHTML = '<i class="fas fa-check"></i> Record payment';
+            recordButton.disabled = sharedMode && !canEdit;
+            li.append(details, recordButton);
             debtsList.appendChild(li);
         });
     }

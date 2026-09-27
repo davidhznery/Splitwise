@@ -101,10 +101,8 @@
                     </div>
                 </section>
 
-                <section class="payment-section glass-card">
-                    <div class="section-header">
-                        <h2><i class="fas fa-handshake"></i> Settle Up</h2>
-                    </div>
+                <details class="payment-section glass-card payment-details">
+                    <summary><i class="fas fa-handshake"></i> Record another payment</summary>
                     <div class="form-container">
                         <input type="number" id="paymentAmount" placeholder="Amount ($)" min="0" step="0.01">
                         <input type="text" id="paymentDescription" placeholder="Payment Note/Method (optional)">
@@ -127,7 +125,7 @@
                         
                         <button id="addPayment" class="btn-secondary btn-full"><i class="fas fa-paper-plane"></i> Record Payment</button>
                     </div>
-                </section>
+                </details>
             </div>
 
             <!-- Right Column: Results & Balances -->
@@ -141,7 +139,11 @@
 
                 <section class="debts-section glass-card flex-grow">
                     <div class="section-header">
-                        <h2><i class="fas fa-money-bill-wave"></i> Who Owes Who</h2>
+                        <div class="settlement-heading">
+                            <h2><i class="fas fa-money-bill-wave"></i> Simplified settlement</h2>
+                            <span id="settlementCount" class="settlement-count" aria-live="polite">0 payments</span>
+                        </div>
+                        <p class="settlement-hint">Everyone’s balances are offset to show the transfers needed to settle.</p>
                     </div>
                     <ul id="debtsList" class="custom-list debts-list"></ul>
                 </section>
